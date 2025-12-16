@@ -177,6 +177,13 @@ impl SysfsParser {
         let usb_version = self.read_attr_string(&path, "version").unwrap_or_default();
         let num_interfaces = self.read_attr_u8(&path, "bNumInterfaces").unwrap_or(1);
 
+        // Check if device is configured (bConfigurationValue is set)
+        // Empty or 0 means device failed to configure (e.g., bandwidth allocation failed)
+        let is_configured = self
+            .read_attr_u8(&path, "bConfigurationValue")
+            .map(|v| v > 0)
+            .unwrap_or(false);
+
         let is_hub = device_class == 0x09;
         let num_ports = if is_hub {
             self.read_attr_u8(&path, "maxchild").ok()
@@ -187,8 +194,12 @@ impl SysfsParser {
         // Parse physical location if present
         let physical_location = self.parse_physical_location(&path).ok();
 
-        // Parse endpoints from all interfaces
-        let endpoints = self.parse_all_endpoints(&path)?;
+        // Parse endpoints from all interfaces (only for configured devices)
+        let endpoints = if is_configured {
+            self.parse_all_endpoints(&path)?
+        } else {
+            Vec::new()
+        };
 
         // Parse max power consumption (bMaxPower is like "500mA" or "0mA")
         let max_power_ma = self.parse_max_power(&path).unwrap_or(0);
@@ -211,6 +222,7 @@ impl SysfsParser {
             usb_version: usb_version.trim().to_string(),
             num_interfaces,
             max_power_ma,
+            is_configured,
         })
     }
 

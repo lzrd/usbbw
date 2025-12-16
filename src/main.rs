@@ -224,16 +224,27 @@ fn print_device_list(
                     &device.path.0,
                     device.vendor_id,
                     device.product_id,
+                    device.serial.as_deref(),
                     device.physical_location.as_ref(),
                 )
                 .unwrap_or_else(|| device.display_name());
 
-            let icon = if device.is_hub { "Hub" } else { "Dev" };
-            let bw = device.periodic_bandwidth_bps();
-            let bw_str = if bw > 0 {
-                format!(" [{}]", format_bandwidth(bw))
+            let icon = if !device.is_configured {
+                "⚠"
+            } else if device.is_hub {
+                "Hub"
             } else {
-                String::new()
+                "Dev"
+            };
+            let status_str = if !device.is_configured {
+                " [NOT CONFIGURED]".to_string()
+            } else {
+                let bw = device.periodic_bandwidth_bps();
+                if bw > 0 {
+                    format!(" [{}]", format_bandwidth(bw))
+                } else {
+                    String::new()
+                }
             };
 
             println!(
@@ -242,7 +253,7 @@ fn print_device_list(
                 icon,
                 name,
                 device.vid_pid(),
-                bw_str
+                status_str
             );
 
             if verbose {
@@ -402,6 +413,10 @@ fn run_tui(topology: usbbw::UsbTopology, config: Config) -> Result<()> {
                     // Toggle bandwidth bars
                     app.toggle_bandwidth_bars();
                 }
+                KeyCode::Char('x') => {
+                    // Toggle expand all / collapse all
+                    app.toggle_expand_all();
+                }
                 KeyCode::Char('e') => {
                     // Edit label for selected device
                     if app.selected_device.is_some() {
@@ -420,7 +435,10 @@ fn run_tui(topology: usbbw::UsbTopology, config: Config) -> Result<()> {
                         match write_pending_labels(&app) {
                             Ok(path) => {
                                 let count = app.pending_label_count();
-                                app.pending_labels.clear();
+                                // Merge pending labels into config so they persist in display
+                                for (key, label) in app.pending_labels.drain() {
+                                    app.config.products.insert(key, label);
+                                }
                                 app.set_status(format!(
                                     "Wrote {} label(s) to {}",
                                     count,
@@ -479,22 +497,22 @@ fn write_pending_labels(app: &App) -> Result<std::path::PathBuf> {
         String::from("# usbbw configuration\n\n")
     };
 
-    // Check if [devices] section exists
-    let has_devices_section = content.contains("[devices]");
+    // Check if [products] section exists
+    let has_products_section = content.contains("[products]");
 
-    if !has_devices_section {
-        content.push_str("\n[devices]\n");
+    if !has_products_section {
+        content.push_str("\n[products]\n");
     }
 
-    // Append new device labels
-    // Find the end of the [devices] section or end of file
-    let insert_pos = if has_devices_section {
-        // Find position after [devices] line
-        if let Some(pos) = content.find("[devices]") {
+    // Append new product labels
+    // Find the end of the [products] section or end of file
+    let insert_pos = if has_products_section {
+        // Find position after [products] line
+        if let Some(pos) = content.find("[products]") {
             // Find next section or end of file
-            let after_devices = &content[pos + 9..];
-            if let Some(next_section) = after_devices.find("\n[") {
-                pos + 9 + next_section
+            let after_products = &content[pos + 10..];
+            if let Some(next_section) = after_products.find("\n[") {
+                pos + 10 + next_section
             } else {
                 content.len()
             }
@@ -505,12 +523,12 @@ fn write_pending_labels(app: &App) -> Result<std::path::PathBuf> {
         content.len()
     };
 
-    // Build new entries
+    // Build new entries (VID:PID:iSerial or VID:PID)
     let mut new_entries = String::new();
-    for (path, label) in &app.pending_labels {
+    for (product_key, label) in &app.pending_labels {
         // Escape the label for TOML
         let escaped = label.replace('\\', "\\\\").replace('"', "\\\"");
-        new_entries.push_str(&format!("\"{}\" = \"{}\"\n", path, escaped));
+        new_entries.push_str(&format!("\"{}\" = \"{}\"\n", product_key, escaped));
     }
 
     // Insert at the right position

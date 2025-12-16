@@ -121,6 +121,7 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
                     bandwidth_bps,
                     is_new,
                     discovery_number,
+                    is_configured,
                     ..
                 } => {
                     let prefix = if *is_hub && *has_children {
@@ -128,9 +129,18 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
                     } else {
                         "└── "
                     };
-                    let icon = if *is_hub { "🔀" } else { "📱" };
+                    let icon = if !is_configured {
+                        "⚠"
+                    } else if *is_hub {
+                        "🔀"
+                    } else {
+                        "📱"
+                    };
 
                     let mut style = Style::default();
+                    if !is_configured {
+                        style = style.fg(Color::Red);
+                    }
                     if is_selected {
                         style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
                     }
@@ -138,8 +148,13 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::raw(prefix));
                     spans.push(Span::styled(format!("{} {}", icon, label), style));
 
-                    // Bandwidth info (if any)
-                    if *bandwidth_bps > 0 {
+                    // NOT CONFIGURED indicator or bandwidth info
+                    if !is_configured {
+                        spans.push(Span::styled(
+                            " [NOT CONFIGURED]",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        ));
+                    } else if *bandwidth_bps > 0 {
                         spans.push(Span::styled(
                             format!(" [{}]", format_bandwidth(*bandwidth_bps)),
                             Style::default().fg(Color::DarkGray),
@@ -550,6 +565,7 @@ fn render_help(frame: &mut Frame) {
         Line::from("  Enter   Expand/collapse"),
         Line::from("  g       Go to top"),
         Line::from("  G       Go to bottom"),
+        Line::from("  x       Expand/collapse all"),
         Line::from(""),
         Line::from(Span::styled(
             "Views",
@@ -629,6 +645,9 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         spans.push(Span::styled("Enter", Style::default().fg(Color::Yellow)));
         spans.push(Span::raw(" Expand  "));
+
+        spans.push(Span::styled("x", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(" All  "));
 
         // View toggles
         spans.push(Span::styled("t/s", Style::default().fg(Color::Yellow)));
@@ -713,7 +732,7 @@ fn render_with_edit_overlay(frame: &mut Frame, app: &App) {
             .split(popup_area);
 
         // Title
-        let title = Paragraph::new(format!("Edit label for {}", edit.device_path))
+        let title = Paragraph::new(format!("Edit label for {}", edit.display_name))
             .style(Style::default().fg(Color::Cyan));
         frame.render_widget(title, inner[0]);
 

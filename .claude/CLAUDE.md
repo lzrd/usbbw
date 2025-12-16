@@ -30,7 +30,7 @@ src/
 ├── config/             # Configuration
 │   └── loader.rs       # TOML config loading, label resolution
 ├── ui/                 # TUI (ratatui)
-│   ├── app.rs          # App state, tree navigation
+│   ├── app.rs          # App state, tree navigation, device tracking
 │   └── render.rs       # Tree view, details panel, help overlay
 └── output/             # Non-TUI output
     └── mermaid.rs      # Mermaid diagram generator
@@ -54,7 +54,7 @@ examples/
 **Key types:**
 - `UsbTopology` - Complete system USB topology (controllers + buses + devices)
 - `UsbBus` - A USB bus with its devices and bandwidth pool
-- `UsbDevice` - A device with endpoints, supports hubs
+- `UsbDevice` - A device with endpoints, configuration status, supports hubs
 - `Endpoint` - USB endpoint with bandwidth calculation
 - `BandwidthPool` - Tracks used/available periodic bandwidth
 
@@ -70,6 +70,13 @@ examples/
 ```
 bandwidth_bps = (max_packet_size * multiplier * 8) / interval_us * 1_000_000
 ```
+
+## Unconfigured Device Detection
+
+Devices that fail bandwidth allocation are detected via sysfs:
+- `bConfigurationValue` empty or 0 indicates failed configuration
+- Shown with ⚠ icon and `[NOT CONFIGURED]` in red
+- No root/dmesg required - uses sysfs attributes
 
 ## Power Consumption
 
@@ -105,21 +112,67 @@ usbbw                           # Launch TUI (default)
 usbbw summary                   # Text summary of bus bandwidth + power
 usbbw recommend                 # Show best buses for new devices
 usbbw list [-v] [--periodic-only]  # List devices (verbose shows power, serial)
-usbbw mermaid [--markdown]      # Export Mermaid diagram
+usbbw mermaid                   # Export Mermaid diagram
+usbbw mermaid --markdown        # Full markdown doc with tables
+usbbw mermaid --html            # Standalone HTML (view in browser)
 usbbw init-config               # Print blank example TOML config
 usbbw generate-config [-o FILE] # Generate config from current system
+usbbw completions <SHELL>       # Generate shell completions (bash/zsh/fish/powershell)
 ```
 
 ## TUI Keybindings
 
-- `j/k` or arrows: Navigate
-- `Enter`: Expand/collapse
+**Navigation:**
+- `j/k` or arrows: Navigate up/down
+- `Enter`: Expand/collapse selected
+- `x`: Expand/collapse all
+- `g`: Go to top
+- `G`: Go to bottom
+
+**Views:**
 - `t`: Tree view
 - `s`: Summary view
-- `r`: Refresh
+- `b`: Toggle bandwidth bars
+
+**Device Labels:**
+- `e`: Edit label for selected device
+- `m`: Mark device as seen (clear NEW indicator)
+- `w`: Write pending labels to config
+
+**Other:**
+- `r`: Refresh topology
 - `a`: Toggle auto-refresh
-- `?`: Help
+- `?`: Help overlay
 - `q`: Quit
+
+## Device Labeling
+
+Labels are stored by `VID:PID:iSerial` for portability across USB ports:
+
+```toml
+[products]
+"0d28:0204:0240000034e428" = "Sidecar RoT"  # Specific device (has serial)
+"0d28:0204" = "OxLink"                       # All devices of this type
+```
+
+**Label lookup priority:**
+1. `VID:PID:iSerial` (specific device with serial)
+2. `VID:PID` (all devices of this type)
+3. Physical location match
+4. Device path (legacy)
+
+**In-TUI labeling:**
+- Press `e` on a device to edit its label
+- Press `w` to write pending labels to `~/.config/usbbw/config.toml`
+- Labels are written to `[products]` section
+
+## New Device Detection
+
+The TUI tracks devices discovered during the session:
+- `●NEW` indicator for devices not present at startup
+- `[N]` shows discovery order
+- Press `m` to mark as seen (clears indicator without labeling)
+- Press `e` to label (also clears indicator)
 
 ## Configuration
 
@@ -130,19 +183,25 @@ Searched in order:
 2. `~/.config/usbbw/config.toml`
 3. `/etc/usbbw.toml`
 
-### Auto-generated Labels
+### Config Inheritance
 
-If no config file exists, labels are automatically generated from the detected USB topology:
-- Controllers: "USB Controller"
-- Buses: "Bus N"
-- Physical ports: Based on ACPI `physical_location` attributes
-- Products: From USB descriptor product/manufacturer strings
+Configs can inherit from other configs using the `inherit` key:
 
-Use `usbbw generate-config` to create a starter config file.
+```toml
+inherit = "../configs/framework-franmgcp.toml"
+
+[products]
+"0d28:0204" = "My Debug Probe"
+```
+
+**Merge behavior:**
+- Tables are merged recursively (child values override parent)
+- Arrays are concatenated
+- Scalar values are replaced by the child
 
 ### Position Label Mappings
 
-ACPI `physical_location` values can be mapped to user-friendly names via config:
+ACPI `physical_location` values can be mapped to user-friendly names:
 
 ```toml
 [position_labels.vertical]
@@ -153,38 +212,6 @@ lower = "Front"   # Near front edge
 left = "Left"
 right = "Right"
 ```
-
-This is useful because ACPI uses generic terms like "upper/lower" which may not match intuitive port naming (e.g., on Framework laptops, "upper" means "rear").
-
-### Config Inheritance
-
-Configs can inherit from other configs using the `inherit` key:
-
-```toml
-# Inherit from a baseline config
-inherit = "../configs/framework-franmgcp.toml"
-
-# Or inherit from multiple files (applied in order)
-inherit = ["base.toml", "overrides.toml"]
-
-# Then add your customizations
-[products]
-"0d28:0204" = "My Debug Probe"
-```
-
-**Merge behavior:**
-- Tables are merged recursively (child values override parent)
-- Arrays are concatenated
-- Scalar values are replaced by the child
-
-Paths are relative to the config file containing the `inherit` key.
-
-### Baseline Configs
-
-Baseline configs for known hardware are in `configs/`:
-- `framework-franmgcp.toml` - Framework Laptop 13 AMD Ryzen AI 300 Series
-
-These provide position label mappings, controller labels, and port capability documentation specific to the hardware. User configs can inherit from these baselines.
 
 ### Config Sections
 
@@ -211,6 +238,7 @@ label = "Left Rear (USB4)"
 
 [products]
 "0d28:0204" = "Debug Probe"
+"0d28:0204:SERIAL123" = "Specific Probe"
 
 [devices]
 "3-1" = "TB Hub"
@@ -221,9 +249,17 @@ filter_vendors = []
 collapse_single_child_hubs = false
 ```
 
+## Shell Completions
+
+```bash
+usbbw completions bash > ~/.local/share/bash-completion/completions/usbbw.sh
+usbbw completions zsh > ~/.zfunc/_usbbw
+usbbw completions fish > ~/.config/fish/completions/usbbw.fish
+```
+
 ## Dependencies
 
-- `clap` - CLI argument parsing
+- `clap` + `clap_complete` - CLI argument parsing and completions
 - `ratatui` + `crossterm` - TUI framework
 - `serde` + `toml` - Configuration
 - `thiserror` + `anyhow` - Error handling

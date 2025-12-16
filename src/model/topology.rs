@@ -137,6 +137,8 @@ pub struct UsbDevice {
     pub num_interfaces: u8,
     /// Maximum power consumption in milliamps (from bMaxPower).
     pub max_power_ma: u16,
+    /// Is device configured? False if bandwidth allocation failed.
+    pub is_configured: bool,
 }
 
 impl UsbDevice {

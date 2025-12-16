@@ -164,6 +164,7 @@ pub fn generate_markdown(topology: &UsbTopology, config: &Config) -> String {
                             &dev.path.0,
                             dev.vendor_id,
                             dev.product_id,
+                            dev.serial.as_deref(),
                             dev.physical_location.as_ref(),
                         )
                         .unwrap_or_else(|| dev.display_name());
@@ -329,6 +330,7 @@ fn add_device_mermaid(
             &device.path.0,
             device.vendor_id,
             device.product_id,
+            device.serial.as_deref(),
             device.physical_location.as_ref(),
         )
         .unwrap_or_else(|| device.display_name());

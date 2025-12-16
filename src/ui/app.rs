@@ -17,8 +17,10 @@ pub enum ViewMode {
 /// Input mode for editing labels.
 #[derive(Debug, Clone)]
 pub struct EditState {
-    /// Device path being edited.
-    pub device_path: String,
+    /// Product key being edited (VID:PID:iSerial or VID:PID).
+    pub product_key: String,
+    /// Display name for the edit dialog.
+    pub display_name: String,
     /// Current input buffer.
     pub input: String,
     /// Cursor position in input.
@@ -182,15 +184,34 @@ impl App {
 
     /// Start editing a label for the selected device.
     pub fn start_edit(&mut self) {
-        if let Some(path) = &self.selected_device {
+        if let Some(device) = self.get_selected_device() {
+            // Build product key: VID:PID:iSerial or VID:PID
+            let product_key = if let Some(serial) = &device.serial {
+                format!(
+                    "{:04x}:{:04x}:{}",
+                    device.vendor_id, device.product_id, serial
+                )
+            } else {
+                format!("{:04x}:{:04x}", device.vendor_id, device.product_id)
+            };
+
+            // Display name for dialog
+            let display_name = if device.serial.is_some() {
+                product_key.clone()
+            } else {
+                format!("{} (no serial)", product_key)
+            };
+
             // Pre-populate with existing pending label or empty
             let existing = self
                 .pending_labels
-                .get(&path.0)
+                .get(&product_key)
                 .cloned()
                 .unwrap_or_default();
+
             self.edit_mode = Some(EditState {
-                device_path: path.0.clone(),
+                product_key,
+                display_name,
                 input: existing.clone(),
                 cursor: existing.len(),
             });
@@ -207,13 +228,45 @@ impl App {
         if let Some(edit) = self.edit_mode.take()
             && !edit.input.is_empty()
         {
-            self.set_pending_label(edit.device_path, edit.input);
+            self.set_pending_label(edit.product_key, edit.input);
         }
     }
 
     /// Toggle bandwidth bar display.
     pub fn toggle_bandwidth_bars(&mut self) {
         self.show_bandwidth_bars = !self.show_bandwidth_bars;
+    }
+
+    /// Expand all nodes.
+    pub fn expand_all(&mut self) {
+        // Add all controllers
+        for controller in self.topology.controllers.values() {
+            self.expanded.insert(controller.id.0.clone());
+        }
+        // Add all buses
+        for bus in self.topology.buses.values() {
+            self.expanded.insert(format!("bus{}", bus.bus_num));
+        }
+    }
+
+    /// Collapse all nodes.
+    pub fn collapse_all(&mut self) {
+        self.expanded.clear();
+    }
+
+    /// Toggle between expand all and collapse all.
+    pub fn toggle_expand_all(&mut self) {
+        // If most things are expanded, collapse all; otherwise expand all
+        let controller_count = self.topology.controllers.len();
+        let bus_count = self.topology.buses.len();
+        let total = controller_count + bus_count;
+        let expanded_count = self.expanded.len();
+
+        if expanded_count > total / 2 {
+            self.collapse_all();
+        } else {
+            self.expand_all();
+        }
     }
 
     /// Toggle expansion of selected item.
@@ -374,16 +427,25 @@ impl App {
         _bus: &UsbBus,
         depth: usize,
     ) {
-        // Check for pending label first, then config, then device name
+        // Check for pending label first (by product key), then config, then device name
+        let product_key = if let Some(serial) = &device.serial {
+            format!(
+                "{:04x}:{:04x}:{}",
+                device.vendor_id, device.product_id, serial
+            )
+        } else {
+            format!("{:04x}:{:04x}", device.vendor_id, device.product_id)
+        };
         let label = self
             .pending_labels
-            .get(&device.path.0)
+            .get(&product_key)
             .cloned()
             .or_else(|| {
                 self.config.device_label(
                     &device.path.0,
                     device.vendor_id,
                     device.product_id,
+                    device.serial.as_deref(),
                     device.physical_location.as_ref(),
                 )
             })
@@ -404,6 +466,7 @@ impl App {
             has_children: !device.children.is_empty(),
             is_new,
             discovery_number,
+            is_configured: device.is_configured,
         });
     }
 
@@ -478,6 +541,8 @@ pub enum TreeItem {
         is_new: bool,
         /// Discovery order number (1-indexed) if new.
         discovery_number: Option<usize>,
+        /// Is device configured? False if bandwidth allocation failed.
+        is_configured: bool,
     },
 }
 

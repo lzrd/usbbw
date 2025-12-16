@@ -9,10 +9,11 @@ A terminal UI for visualizing USB bandwidth allocation on Linux.
 
 - **Tree view** of USB topology (controllers, buses, hubs, devices)
 - **Bandwidth tracking** for periodic transfers (interrupt/isochronous endpoints)
+- **Unconfigured device detection** - shows devices that failed bandwidth allocation
 - **Power consumption** display per device and bus
 - **New device detection** with visual indicators when devices are plugged in
-- **In-app labeling** to tag devices with custom names
-- **Mermaid diagram export** for documentation
+- **In-app labeling** to tag devices with portable VID:PID:iSerial keys
+- **Mermaid diagram export** for documentation (markdown or standalone HTML)
 - **Config inheritance** for shareable hardware-specific baselines
 
 ## Installation
@@ -48,6 +49,7 @@ usbbw completions bash      # Generate shell completions
 |-----|--------|
 | `j/k` | Navigate up/down |
 | `Enter` | Expand/collapse |
+| `x` | Expand/collapse all |
 | `t/s` | Tree/Summary view |
 | `b` | Toggle bandwidth bars |
 | `e` | Edit device label |
@@ -56,6 +58,18 @@ usbbw completions bash      # Generate shell completions
 | `r` | Refresh |
 | `?` | Help |
 | `q` | Quit |
+
+## Device Labeling
+
+Labels are stored by `VID:PID:iSerial` so they follow devices across ports:
+
+```toml
+[products]
+"0d28:0204:02400000e428" = "Sidecar RoT"  # Specific device (has serial)
+"0d28:0204" = "OxLink"                     # All devices of this type
+```
+
+Press `e` in the TUI to label a device, then `w` to save to config.
 
 ## Configuration
 
@@ -72,11 +86,7 @@ inherit = "configs/framework-franmgcp.toml"
 
 [products]
 "0d28:0204" = "Debug Probe"
-"2109:2813" = "USB Hub"
-
-[devices]
-"3-1" = "Thunderbolt Dock"
-"3-1.2" = "Keyboard"
+"0d28:0204:SERIAL123" = "Specific Probe"
 ```
 
 ### Position Labels
@@ -98,13 +108,13 @@ right = "Right"
 - Only **interrupt** and **isochronous** endpoints reserve bandwidth
 - USB 2.0: Max 80% of 480 Mbps = 384 Mbps for periodic transfers
 - USB 3.x: Separate bandwidth pool from USB 2.0
-- Bandwidth is shared across the entire bus, not per-hub
+- Devices with `⚠ [NOT CONFIGURED]` failed bandwidth allocation
 
 ## Shell Completions
 
 ```bash
 # Bash
-usbbw completions bash > ~/.local/share/bash-completion/completions/usbbw
+usbbw completions bash > ~/.local/share/bash-completion/completions/usbbw.sh
 
 # Zsh
 usbbw completions zsh > ~/.zfunc/_usbbw

@@ -303,22 +303,33 @@ impl Config {
     }
 
     /// Get label for a device, checking all sources in priority order:
-    /// 1. Explicit device path label
-    /// 2. Physical location match
-    /// 3. Product (VID:PID) label
+    /// 1. Product with serial (VID:PID:iSerial) - specific device
+    /// 2. Product without serial (VID:PID) - all devices of this type
+    /// 3. Physical location match
+    /// 4. Explicit device path label (legacy)
     pub fn device_label(
         &self,
         path: &str,
         vendor_id: u16,
         product_id: u16,
+        serial: Option<&str>,
         physical_location: Option<&PhysicalLocation>,
     ) -> Option<String> {
-        // Priority 1: Explicit device path label
-        if let Some(label) = self.devices.get(path) {
+        // Priority 1: Product with serial (VID:PID:iSerial)
+        if let Some(serial) = serial {
+            let key_with_serial = format!("{:04x}:{:04x}:{}", vendor_id, product_id, serial);
+            if let Some(label) = self.products.get(&key_with_serial) {
+                return Some(label.clone());
+            }
+        }
+
+        // Priority 2: Product without serial (VID:PID)
+        let product_key = format!("{:04x}:{:04x}", vendor_id, product_id);
+        if let Some(label) = self.products.get(&product_key) {
             return Some(label.clone());
         }
 
-        // Priority 2: Physical location match
+        // Priority 3: Physical location match
         if let Some(loc) = physical_location {
             for port_label in &self.physical_ports {
                 if Self::matches_physical_location(port_label, loc) {
@@ -327,9 +338,8 @@ impl Config {
             }
         }
 
-        // Priority 3: Product label
-        let product_key = format!("{:04x}:{:04x}", vendor_id, product_id);
-        if let Some(label) = self.products.get(&product_key) {
+        // Priority 4: Explicit device path label (legacy)
+        if let Some(label) = self.devices.get(path) {
             return Some(label.clone());
         }
 
