@@ -1,0 +1,29 @@
+[package]
+name = "usbbw"
+version = "0.1.0"
+edition = "2024"
+authors = ["stoltz"]
+description = "USB bandwidth visualization tool"
+license = "MIT OR Apache-2.0"
+keywords = ["usb", "bandwidth", "linux", "tui"]
+categories = ["command-line-utilities", "hardware-support"]
+
+[dependencies]
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+clap_complete = "4.4"
+
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Configuration
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Utilities
+thiserror = "2.0"
+anyhow = "1.0"
+
+# XDG directory support
+dirs = "5.0"

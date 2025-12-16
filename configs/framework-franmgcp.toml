@@ -1,0 +1,96 @@
+# Framework Laptop 13 (AMD Ryzen AI 300 Series) - Motherboard FRANMGCP
+#
+# Baseline configuration for Framework FRANMGCP mainboard.
+# This file provides position label mappings and port capability info.
+#
+# To use this config, either:
+# 1. Copy to ~/.config/usbbw/config.toml and customize
+# 2. Create your own config that inherits from this one (when inherit is implemented)
+#
+# Reference: https://knowledgebase.frame.work/expansion-card-functionality-on-framework-laptop-13-amd-ryzen-ai-300-series-Hy5SfMRs1l
+
+[settings]
+refresh_ms = 1000
+theme = "dark"
+use_bits = true
+
+# =============================================================================
+# Position Label Mappings
+# =============================================================================
+# Framework laptops use ACPI physical_location attributes.
+# "upper" = near hinge (rear), "lower" = near front edge (front)
+# "left" in horizontal_position seems to mean the outer edge of the panel
+
+[position_labels.vertical]
+upper = "Rear"   # Near hinge
+lower = "Front"  # Near front edge
+
+[position_labels.panel]
+left = "Left"
+right = "Right"
+
+[position_labels.horizontal]
+left = "Outer"
+center = ""
+right = "Inner"
+
+# =============================================================================
+# USB Port Capabilities (Framework 13 AMD Ryzen AI 300)
+# =============================================================================
+# Port 1 (Left Rear):   USB4 + DisplayPort
+# Port 2 (Left Front):  USB 3.2 only (no DP)
+# Port 3 (Right Rear):  USB4 + DisplayPort
+# Port 4 (Right Front): USB 3.2 + DisplayPort
+#
+# Note: ACPI physical_location only reports specific location for some ports.
+# Other ports report center/center which is filtered as non-specific.
+
+[[physical_ports]]
+panel = "left"
+horizontal_position = "left"
+vertical_position = "upper"
+label = "Left Rear (USB4/TB)"
+
+# Left Front port - may not have specific ACPI location
+# [[physical_ports]]
+# panel = "left"
+# vertical_position = "lower"
+# label = "Left Front (USB3)"
+
+# Right Rear port - may not have specific ACPI location
+# [[physical_ports]]
+# panel = "right"
+# vertical_position = "upper"
+# label = "Right Rear (USB4/TB)"
+
+# Right Front port - may not have specific ACPI location
+# [[physical_ports]]
+# panel = "right"
+# vertical_position = "lower"
+# label = "Right Front (USB3/DP)"
+
+# =============================================================================
+# Controller Labels
+# =============================================================================
+# The Framework 13 AMD has 4 xHCI controllers, each with paired USB 2.0/3.x buses.
+
+[controllers]
+"0000:c1:00.4" = "Internal USB (Fingerprint)"
+"0000:c3:00.0" = "Left USB-C Ports"
+"0000:c3:00.3" = "Right USB-C Ports"
+"0000:c3:00.4" = "USB4/Thunderbolt Hub"
+
+# =============================================================================
+# Bus Labels
+# =============================================================================
+# Odd buses = USB 2.0, Even buses = USB 3.x
+
+[buses]
+"1" = "Internal 2.0"
+"2" = "Internal 3.x"
+"3" = "Left 2.0"
+"4" = "Left 3.x"
+"5" = "Right 2.0"
+"6" = "Right 3.x"
+"7" = "TB Hub 2.0"
+"8" = "TB Hub 3.x"
