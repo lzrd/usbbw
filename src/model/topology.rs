@@ -172,6 +172,16 @@ impl UsbDevice {
     pub fn vid_pid(&self) -> String {
         format!("{:04x}:{:04x}", self.vendor_id, self.product_id)
     }
+
+    /// Config key for label lookup (VID:PID:iSerial or VID:PID if no serial).
+    pub fn config_key(&self) -> String {
+        match &self.serial {
+            Some(serial) if !serial.is_empty() => {
+                format!("{:04x}:{:04x}:{}", self.vendor_id, self.product_id, serial)
+            }
+            _ => self.vid_pid(),
+        }
+    }
 }
 
 /// Controller identifier (derived from PCI path or bus number).
@@ -181,6 +191,24 @@ pub struct ControllerId(pub String);
 impl std::fmt::Display for ControllerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+/// Controller type (USB, USB4/Thunderbolt, etc.)
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ControllerType {
+    #[default]
+    Usb,
+    /// USB4/Thunderbolt controller
+    Usb4,
+}
+
+impl std::fmt::Display for ControllerType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ControllerType::Usb => write!(f, "USB"),
+            ControllerType::Usb4 => write!(f, "USB4/TB"),
+        }
     }
 }
 
@@ -197,6 +225,8 @@ pub struct UsbController {
     pub usb3_bus: Option<u8>,
     /// User-defined label.
     pub label: Option<String>,
+    /// Controller type (USB or USB4/Thunderbolt).
+    pub controller_type: ControllerType,
 }
 
 impl UsbController {
@@ -347,6 +377,27 @@ impl UsbTopology {
         self.buses
             .values()
             .flat_map(|bus| bus.devices.keys().map(|p| p.0.clone()))
+    }
+
+    /// Get the paired bus number for a given bus (USB 2.0 <-> USB 3.x pairing).
+    /// Returns None if no pairing exists.
+    pub fn get_paired_bus(&self, bus_num: u8) -> Option<u8> {
+        for controller in self.controllers.values() {
+            if controller.usb2_bus == Some(bus_num) {
+                return controller.usb3_bus;
+            }
+            if controller.usb3_bus == Some(bus_num) {
+                return controller.usb2_bus;
+            }
+        }
+        None
+    }
+
+    /// Get controller for a given bus number.
+    pub fn get_controller_for_bus(&self, bus_num: u8) -> Option<&UsbController> {
+        self.controllers
+            .values()
+            .find(|c| c.usb2_bus == Some(bus_num) || c.usb3_bus == Some(bus_num))
     }
 }
 

@@ -1,6 +1,6 @@
 //! TUI rendering with ratatui.
 
-use crate::model::{BandwidthPool, bandwidth::bandwidth_bar, format_bandwidth};
+use crate::model::{BandwidthPool, ControllerType, bandwidth::bandwidth_bar, format_bandwidth};
 use crate::ui::app::{App, TreeItem, ViewMode};
 use ratatui::{
     Frame,
@@ -18,10 +18,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
 
-    // Main layout: content area + footer
+    // Main layout: content area + device status + footer
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
 
     // Content area: tree on left, details on right
@@ -39,8 +43,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Right side: details
     render_details(frame, app, main_chunks[1]);
 
+    // Device status line (path + config key for easy copying)
+    render_device_status(frame, app, outer_chunks[1]);
+
     // Footer with contextual keybindings
-    render_footer(frame, app, outer_chunks[1]);
+    render_footer(frame, app, outer_chunks[2]);
 
     // Help overlay if active
     if app.show_help {
@@ -62,15 +69,32 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
             let mut spans = vec![Span::raw(indent)];
 
             match item {
-                TreeItem::Controller { id, label, .. } => {
+                TreeItem::Controller {
+                    id,
+                    label,
+                    controller_type,
+                    ..
+                } => {
                     let expanded = app.is_expanded(id);
                     let prefix = if expanded { "▼ " } else { "▶ " };
-                    let mut style = Style::default().fg(Color::Cyan);
+                    let (color, type_badge) = match controller_type {
+                        ControllerType::Usb4 => (Color::Magenta, " [USB4/TB]"),
+                        ControllerType::Usb => (Color::Cyan, ""),
+                    };
+                    let mut style = Style::default().fg(color);
                     if is_selected {
                         style = style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
                     }
                     spans.push(Span::raw(prefix));
                     spans.push(Span::styled(label.clone(), style));
+                    if !type_badge.is_empty() {
+                        spans.push(Span::styled(
+                            type_badge,
+                            Style::default()
+                                .fg(Color::Magenta)
+                                .add_modifier(Modifier::DIM),
+                        ));
+                    }
                 }
                 TreeItem::Bus {
                     bus_num,
@@ -115,6 +139,7 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
                     }
                 }
                 TreeItem::Device {
+                    path,
                     label,
                     is_hub,
                     has_children,
@@ -122,6 +147,7 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
                     is_new,
                     discovery_number,
                     is_configured,
+                    depth,
                     ..
                 } => {
                     let prefix = if *is_hub && *has_children {
@@ -146,6 +172,13 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
                     }
 
                     spans.push(Span::raw(prefix));
+                    // Show port path for root-level devices (direct children of bus)
+                    if *depth == 2 {
+                        spans.push(Span::styled(
+                            format!("[{}] ", path.0),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
                     spans.push(Span::styled(format!("{} {}", icon, label), style));
 
                     // NOT CONFIGURED indicator or bandwidth info
@@ -257,15 +290,22 @@ fn render_summary(frame: &mut Frame, app: &App, area: Rect) {
             Color::Green
         };
 
-        // Bus header
+        // Bus header with pairing info
         let label = app
             .config
             .bus_label(bus.bus_num)
             .unwrap_or_else(|| format!("Bus {}", bus.bus_num));
 
+        let paired_info = if let Some(paired_num) = app.topology.get_paired_bus(bus.bus_num) {
+            format!(" ↔ Bus {}", paired_num)
+        } else {
+            String::new()
+        };
+
         lines.push(Line::from(vec![
             Span::styled(format!("{:<20}", label), style),
             Span::styled(format!("{:>6}", bus.speed.short_name()), speed_style),
+            Span::styled(paired_info, Style::default().fg(Color::DarkGray)),
         ]));
 
         // Bandwidth bar
@@ -336,16 +376,21 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(device.display_name(), Style::default().fg(Color::White)),
         ]));
 
+        // Config Key (VID:PID:iSerial) - prominent for easy copying
+        lines.push(Line::from(vec![
+            Span::styled("Key:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                device.config_key(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
         // Path
         lines.push(Line::from(vec![
             Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&device.path.0),
-        ]));
-
-        // VID:PID
-        lines.push(Line::from(vec![
-            Span::styled("VID:PID: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(device.vid_pid()),
         ]));
 
         // Speed
@@ -370,11 +415,11 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
             ]));
         }
 
-        // Serial
+        // Serial (only if not already shown in config key)
         if let Some(serial) = &device.serial {
             lines.push(Line::from(vec![
                 Span::styled("Serial: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(serial, Style::default().fg(Color::Yellow)),
+                Span::raw(serial),
             ]));
         }
 
@@ -384,13 +429,22 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(&device.usb_version),
         ]));
 
-        // Physical location
+        // Physical location (ACPI)
         if let Some(loc) = &device.physical_location {
             let loc_str = loc.display();
             if !loc_str.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled("Location: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(loc_str),
+                    Span::styled(loc_str, Style::default().fg(Color::Magenta)),
+                ]));
+                // Show raw ACPI values for debugging port identification
+                lines.push(Line::from(vec![
+                    Span::styled("  (ACPI: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format!(
+                        "panel={} vert={} horiz={}",
+                        loc.panel, loc.vertical_position, loc.horizontal_position
+                    )),
+                    Span::styled(")", Style::default().fg(Color::DarkGray)),
                 ]));
             }
         }
@@ -480,6 +534,37 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(format!("{}", bus.num_ports)),
         ]));
 
+        // Show controller type
+        if let Some(controller) = app.topology.get_controller_for_bus(bus.bus_num)
+            && controller.controller_type == ControllerType::Usb4
+        {
+            lines.push(Line::from(vec![
+                Span::styled("Controller: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("USB4/Thunderbolt", Style::default().fg(Color::Magenta)),
+            ]));
+        }
+
+        // Show paired bus (USB 2.0 <-> USB 3.x share same physical ports)
+        if let Some(paired_num) = app.topology.get_paired_bus(bus.bus_num) {
+            let paired_label = app
+                .config
+                .bus_label(paired_num)
+                .unwrap_or_else(|| format!("Bus {}", paired_num));
+            let paired_speed = app
+                .topology
+                .buses
+                .get(&paired_num)
+                .map(|b| b.speed.short_name())
+                .unwrap_or("?");
+            lines.push(Line::from(vec![
+                Span::styled("Paired with: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{} ({})", paired_label, paired_speed),
+                    Style::default().fg(Color::Magenta),
+                ),
+            ]));
+        }
+
         lines.push(Line::from(vec![
             Span::styled("Devices: ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{}", bus.device_count())),
@@ -535,9 +620,8 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default().title(" Details ").borders(Borders::ALL))
-        .wrap(Wrap { trim: true });
+    let paragraph =
+        Paragraph::new(lines).block(Block::default().title(" Details ").borders(Borders::ALL));
 
     frame.render_widget(paragraph, area);
 }
@@ -626,6 +710,37 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+/// Render device status line showing path and config key for easy copying.
+fn render_device_status(frame: &mut Frame, app: &App, area: Rect) {
+    let spans = if let Some(device) = app.get_selected_device() {
+        vec![
+            Span::styled(" Device: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&device.path.0, Style::default().fg(Color::Cyan)),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                device.config_key(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    } else if let Some(bus) = app.get_selected_bus() {
+        vec![
+            Span::styled(" Bus: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", bus.bus_num), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("  {}", bus.speed.short_name()),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]
+    } else {
+        vec![]
+    };
+
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
+}
+
 /// Render contextual footer with keybindings.
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
@@ -695,7 +810,11 @@ fn render_with_edit_overlay(frame: &mut Frame, app: &App) {
     // Render the main content (dimmed)
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
 
     let main_chunks = Layout::default()
@@ -709,6 +828,9 @@ fn render_with_edit_overlay(frame: &mut Frame, app: &App) {
     }
     render_details(frame, app, main_chunks[1]);
 
+    // Device status line
+    render_device_status(frame, app, outer_chunks[1]);
+
     // Edit footer
     let footer = Paragraph::new(Line::from(vec![
         Span::styled("Editing label...  ", Style::default().fg(Color::Yellow)),
@@ -718,7 +840,7 @@ fn render_with_edit_overlay(frame: &mut Frame, app: &App) {
         Span::raw(" Cancel"),
     ]))
     .style(Style::default().bg(Color::DarkGray));
-    frame.render_widget(footer, outer_chunks[1]);
+    frame.render_widget(footer, outer_chunks[2]);
 
     // Edit popup overlay
     if let Some(edit) = &app.edit_mode {

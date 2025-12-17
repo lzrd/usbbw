@@ -1,14 +1,15 @@
 //! Sysfs parser for USB device information.
 
 use crate::model::{
-    ControllerId, DevicePath, Direction, Endpoint, PhysicalLocation, TransferType, UsbBus,
-    UsbController, UsbDevice, UsbSpeed, UsbTopology,
+    ControllerId, ControllerType, DevicePath, Direction, Endpoint, PhysicalLocation, TransferType,
+    UsbBus, UsbController, UsbDevice, UsbSpeed, UsbTopology,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 const SYSFS_USB_DEVICES: &str = "/sys/bus/usb/devices";
+const SYSFS_TB_DEVICES: &str = "/sys/bus/thunderbolt/devices";
 
 /// Errors that can occur during sysfs parsing.
 #[derive(Debug, Error)]
@@ -24,6 +25,8 @@ pub enum SysfsError {
 /// Parser for Linux sysfs USB device information.
 pub struct SysfsParser {
     base_path: PathBuf,
+    /// PCI parent addresses that have Thunderbolt/USB4 domains.
+    usb4_parents: std::collections::HashSet<String>,
 }
 
 impl Default for SysfsParser {
@@ -35,8 +38,10 @@ impl Default for SysfsParser {
 impl SysfsParser {
     /// Create a new parser using the default sysfs path.
     pub fn new() -> Self {
+        let usb4_parents = Self::detect_usb4_parents();
         Self {
             base_path: PathBuf::from(SYSFS_USB_DEVICES),
+            usb4_parents,
         }
     }
 
@@ -44,7 +49,59 @@ impl SysfsParser {
     pub fn with_base_path(base_path: impl AsRef<Path>) -> Self {
         Self {
             base_path: base_path.as_ref().to_path_buf(),
+            usb4_parents: std::collections::HashSet::new(),
         }
+    }
+
+    /// Detect PCI parent addresses that have Thunderbolt/USB4 domains.
+    /// USB controllers under these parents are USB4-capable.
+    fn detect_usb4_parents() -> std::collections::HashSet<String> {
+        let mut parents = std::collections::HashSet::new();
+
+        // Read thunderbolt domain symlinks to find their PCI parent
+        let tb_path = Path::new(SYSFS_TB_DEVICES);
+        if let Ok(entries) = std::fs::read_dir(tb_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("domain") {
+                    // Read symlink to find PCI path
+                    if let Ok(target) = std::fs::read_link(entry.path()) {
+                        let path_str = target.to_string_lossy();
+                        // Extract parent PCI address (e.g., "0000:00:08.3")
+                        // Path looks like: ../../../devices/pci0000:00/0000:00:08.3/0000:c3:00.5/domain0
+                        let components: Vec<&str> = path_str.split('/').collect();
+                        for (i, comp) in components.iter().enumerate() {
+                            if comp.starts_with("domain") && i >= 2 {
+                                // Go up two levels to get the common parent
+                                // e.g., 0000:c3:00.5 -> 0000:00:08.3
+                                let parent = components[i - 2];
+                                if parent.contains(':') {
+                                    parents.insert(parent.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        parents
+    }
+
+    /// Check if a USB bus is under a USB4/Thunderbolt controller.
+    fn is_usb4_bus(&self, bus_num: u8) -> bool {
+        let link = self.base_path.join(format!("usb{}", bus_num));
+
+        if let Ok(target) = std::fs::read_link(&link) {
+            let path_str = target.to_string_lossy();
+            // Check if any USB4 parent is in the path
+            for parent in &self.usb4_parents {
+                if path_str.contains(parent) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Parse complete USB topology from sysfs.
@@ -63,6 +120,7 @@ impl SysfsParser {
                     Ok(bus) => {
                         // Extract or create controller
                         let controller_id = self.get_controller_id(bus_num)?;
+                        let is_usb4 = self.is_usb4_bus(bus_num);
 
                         let controller = topology
                             .controllers
@@ -73,6 +131,11 @@ impl SysfsParser {
                                 usb2_bus: None,
                                 usb3_bus: None,
                                 label: None,
+                                controller_type: if is_usb4 {
+                                    ControllerType::Usb4
+                                } else {
+                                    ControllerType::Usb
+                                },
                             });
 
                         if bus.is_superspeed() {

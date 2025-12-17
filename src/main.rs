@@ -182,7 +182,20 @@ fn print_summary(topology: &usbbw::UsbTopology, config: &Config) {
             "USB 2.0"
         };
 
-        println!("{} ({}, {})", label, bus_type, bus.speed.short_name());
+        // Show paired bus info
+        let paired_info = if let Some(paired_num) = topology.get_paired_bus(bus.bus_num) {
+            format!(" ↔ Bus {}", paired_num)
+        } else {
+            String::new()
+        };
+
+        println!(
+            "{} ({}, {}){}",
+            label,
+            bus_type,
+            bus.speed.short_name(),
+            paired_info
+        );
         println!(
             "  Periodic BW: {} / {} ({:.1}%)",
             pool.format_used(),
@@ -229,6 +242,13 @@ fn print_device_list(
                 )
                 .unwrap_or_else(|| device.display_name());
 
+            // Show port path for root-level devices (direct on bus)
+            let port_prefix = if device.path.depth() == 0 {
+                format!("[{}] ", device.path.0)
+            } else {
+                String::new()
+            };
+
             let icon = if !device.is_configured {
                 "⚠"
             } else if device.is_hub {
@@ -248,8 +268,9 @@ fn print_device_list(
             };
 
             println!(
-                "{}{} {} ({}){}",
+                "{}{}{} {} ({}){}",
                 indent,
+                port_prefix,
                 icon,
                 name,
                 device.vid_pid(),
@@ -263,6 +284,15 @@ fn print_device_list(
                 }
                 if let Some(serial) = &device.serial {
                     println!("{}    Serial: {}", indent, serial);
+                }
+                // Show physical location for root-level devices
+                if device.path.depth() == 0
+                    && let Some(loc) = &device.physical_location
+                {
+                    println!(
+                        "{}    Location: panel={} vert={} horiz={}",
+                        indent, loc.panel, loc.vertical_position, loc.horizontal_position
+                    );
                 }
                 for ep in device.periodic_endpoints() {
                     let ep_bw = ep.bandwidth_bps(device.speed);

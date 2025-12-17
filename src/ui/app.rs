@@ -1,7 +1,9 @@
 //! TUI application state.
 
 use crate::config::Config;
-use crate::model::{BandwidthPool, DevicePath, UsbBus, UsbDevice, UsbTopology, format_bandwidth};
+use crate::model::{
+    BandwidthPool, ControllerType, DevicePath, UsbBus, UsbDevice, UsbTopology, format_bandwidth,
+};
 use std::collections::{HashMap, HashSet};
 
 /// View mode for the TUI.
@@ -377,6 +379,7 @@ impl App {
                     .controller_label(&controller.pci_address)
                     .unwrap_or_else(|| controller.pci_address.clone()),
                 pci_address: controller.pci_address.clone(),
+                controller_type: controller.controller_type.clone(),
             });
 
             if self.is_expanded(&controller.id.0) {
@@ -518,6 +521,7 @@ pub enum TreeItem {
         id: String,
         label: String,
         pci_address: String,
+        controller_type: ControllerType,
     },
     Bus {
         bus_num: u8,
