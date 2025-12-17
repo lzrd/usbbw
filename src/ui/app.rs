@@ -67,6 +67,8 @@ pub struct App {
     // --- Display options ---
     /// Show inline bandwidth bars in tree view.
     pub show_bandwidth_bars: bool,
+    /// Details panel scroll offset.
+    pub details_scroll: u16,
 
     // --- Edit mode ---
     /// Active edit state (if editing a label).
@@ -106,6 +108,7 @@ impl App {
             seen_devices: HashSet::new(),
             pending_labels: HashMap::new(),
             show_bandwidth_bars: false,
+            details_scroll: 0,
             edit_mode: None,
             status_message: None,
         }
@@ -320,6 +323,9 @@ impl App {
 
     /// Update selected device based on current selection.
     fn update_selected_device(&mut self) {
+        // Reset details scroll when selection changes
+        self.details_scroll = 0;
+
         let items = self.visible_items();
         if let Some(item) = items.get(self.selected) {
             match item {
@@ -337,6 +343,16 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Scroll details panel up.
+    pub fn scroll_details_up(&mut self) {
+        self.details_scroll = self.details_scroll.saturating_sub(3);
+    }
+
+    /// Scroll details panel down.
+    pub fn scroll_details_down(&mut self) {
+        self.details_scroll = self.details_scroll.saturating_add(3);
     }
 
     /// Toggle view mode.

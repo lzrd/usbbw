@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
 /// Main render function.
@@ -248,7 +248,9 @@ fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(Color::White)),
     );
 
-    frame.render_widget(list, area);
+    // Use ListState for automatic scroll-to-selection
+    let mut state = ListState::default().with_selected(Some(app.selected));
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 /// Render summary view (all buses).
@@ -428,6 +430,21 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("USB Version: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&device.usb_version),
         ]));
+
+        // Connection health
+        if let Some(duration_ms) = device.connected_duration_ms {
+            let duration_str = format_duration_ms(duration_ms);
+            lines.push(Line::from(vec![
+                Span::styled("Connected: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(duration_str),
+            ]));
+        }
+        if let Some(lanes) = device.rx_lanes {
+            lines.push(Line::from(vec![
+                Span::styled("Link: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{} rx lane(s)", lanes)),
+            ]));
+        }
 
         // Physical location (ACPI)
         if let Some(loc) = &device.physical_location {
@@ -613,6 +630,58 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(usage_color),
             ),
         ]));
+
+        // Port health section
+        if !bus.ports.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Port Status",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+
+            let total_oc = bus.total_over_current_count();
+            if total_oc > 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("⚠ Over-current events: ", Style::default().fg(Color::Red)),
+                    Span::styled(format!("{}", total_oc), Style::default().fg(Color::Red)),
+                ]));
+            }
+
+            for port in &bus.ports {
+                let state_str = match port.state {
+                    crate::model::PortState::NotAttached => "empty",
+                    crate::model::PortState::Suspended => "suspended",
+                    crate::model::PortState::Configured => "active",
+                    crate::model::PortState::Reconnecting => "reconnecting",
+                    crate::model::PortState::Powered => "powered",
+                    crate::model::PortState::PoweredOff => "off",
+                    crate::model::PortState::Disconnected => "disconnected",
+                };
+
+                let (state_color, state_icon) = if port.state.is_problematic() {
+                    (Color::Red, "⚠")
+                } else if port.state == crate::model::PortState::Configured {
+                    (Color::Green, "●")
+                } else if port.state == crate::model::PortState::Suspended {
+                    (Color::Yellow, "○")
+                } else {
+                    (Color::DarkGray, "○")
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  Port {}: ", port.port_num),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("{} {}", state_icon, state_str),
+                        Style::default().fg(state_color),
+                    ),
+                ]));
+            }
+        }
     } else {
         lines.push(Line::from(Span::styled(
             "Select a device or bus",
@@ -620,8 +689,9 @@ fn render_details(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let paragraph =
-        Paragraph::new(lines).block(Block::default().title(" Details ").borders(Borders::ALL));
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().title(" Details ").borders(Borders::ALL))
+        .scroll((app.details_scroll, 0));
 
     frame.render_widget(paragraph, area);
 }
@@ -646,6 +716,8 @@ fn render_help(frame: &mut Frame) {
         )),
         Line::from("  j/↓     Move down"),
         Line::from("  k/↑     Move up"),
+        Line::from("  J/PgDn  Scroll details down"),
+        Line::from("  K/PgUp  Scroll details up"),
         Line::from("  Enter   Expand/collapse"),
         Line::from("  g       Go to top"),
         Line::from("  G       Go to bottom"),
@@ -675,6 +747,16 @@ fn render_help(frame: &mut Frame) {
         Line::from("  a       Toggle auto-refresh"),
         Line::from("  ?       Toggle help"),
         Line::from("  q       Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Icons",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  ⚡      USB bus"),
+        Line::from("  🔀      Hub"),
+        Line::from("  📱      Device"),
+        Line::from("  ⚠       Not configured (bandwidth failed)"),
+        Line::from("  ●NEW    Discovered after startup"),
     ];
 
     let paragraph = Paragraph::new(help_text)
@@ -877,5 +959,19 @@ fn render_with_edit_overlay(frame: &mut Frame, app: &App) {
             .border_style(Style::default().fg(Color::Cyan))
             .style(Style::default().bg(Color::Black));
         frame.render_widget(block, popup_area);
+    }
+}
+
+/// Format duration in milliseconds as human-readable string.
+fn format_duration_ms(ms: u64) -> String {
+    let secs = ms / 1000;
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if secs < 86400 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
     }
 }

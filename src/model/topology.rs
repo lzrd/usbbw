@@ -77,6 +77,63 @@ pub struct PhysicalLocation {
     pub lid: bool,
 }
 
+/// USB port state from sysfs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PortState {
+    /// No device connected.
+    #[default]
+    NotAttached,
+    /// Port is powered off.
+    PoweredOff,
+    /// Device disconnected.
+    Disconnected,
+    /// Port is powered but device not reset.
+    Powered,
+    /// Device reconnecting/enumerating.
+    Reconnecting,
+    /// Device is suspended (power-saving).
+    Suspended,
+    /// Device is fully configured and active.
+    Configured,
+}
+
+impl PortState {
+    /// Parse from sysfs state string.
+    pub fn from_sysfs(s: &str) -> Self {
+        match s.trim() {
+            "not-attached" => PortState::NotAttached,
+            "powered-off" => PortState::PoweredOff,
+            "disconnected" => PortState::Disconnected,
+            "powered" => PortState::Powered,
+            "reconnecting" => PortState::Reconnecting,
+            "suspended" => PortState::Suspended,
+            "configured" => PortState::Configured,
+            _ => PortState::NotAttached,
+        }
+    }
+
+    /// Check if this state indicates a problem.
+    pub fn is_problematic(&self) -> bool {
+        matches!(
+            self,
+            PortState::Reconnecting | PortState::Disconnected | PortState::Powered
+        )
+    }
+}
+
+/// USB port health information.
+#[derive(Debug, Clone, Default)]
+pub struct PortInfo {
+    /// Port number (1-based).
+    pub port_num: u8,
+    /// Port state.
+    pub state: PortState,
+    /// Over-current event count.
+    pub over_current_count: u32,
+    /// Device connected to this port (if any).
+    pub device_path: Option<DevicePath>,
+}
+
 impl PhysicalLocation {
     /// Format as a human-readable string.
     pub fn display(&self) -> String {
@@ -139,6 +196,10 @@ pub struct UsbDevice {
     pub max_power_ma: u16,
     /// Is device configured? False if bandwidth allocation failed.
     pub is_configured: bool,
+    /// How long the device has been connected (milliseconds).
+    pub connected_duration_ms: Option<u64>,
+    /// USB 3.x rx lane count (1 for SS, 2 for SS Gen 2x2).
+    pub rx_lanes: Option<u8>,
 }
 
 impl UsbDevice {
@@ -253,6 +314,8 @@ pub struct UsbBus {
     pub devices: HashMap<DevicePath, UsbDevice>,
     /// Controller this bus belongs to.
     pub controller_id: ControllerId,
+    /// Root hub port info.
+    pub ports: Vec<PortInfo>,
 }
 
 impl UsbBus {
@@ -325,6 +388,18 @@ impl UsbBus {
     /// Calculate total configured power consumption on this bus (in mA).
     pub fn total_power_ma(&self) -> u32 {
         self.devices.values().map(|d| d.max_power_ma as u32).sum()
+    }
+
+    /// Check if any port has health issues.
+    pub fn has_port_issues(&self) -> bool {
+        self.ports
+            .iter()
+            .any(|p| p.state.is_problematic() || p.over_current_count > 0)
+    }
+
+    /// Get total over-current event count across all ports.
+    pub fn total_over_current_count(&self) -> u32 {
+        self.ports.iter().map(|p| p.over_current_count).sum()
     }
 }
 
@@ -417,6 +492,32 @@ pub fn format_bandwidth(bps: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::UsbSpeed;
+
+    fn make_test_device(vendor_id: u16, product_id: u16, serial: Option<&str>) -> UsbDevice {
+        UsbDevice {
+            path: DevicePath::new("1-1"),
+            speed: UsbSpeed::Full,
+            vendor_id,
+            product_id,
+            manufacturer: None,
+            product: None,
+            serial: serial.map(String::from),
+            device_class: 0,
+            is_hub: false,
+            num_ports: None,
+            endpoints: vec![],
+            physical_location: None,
+            children: vec![],
+            label: None,
+            usb_version: "2.00".to_string(),
+            num_interfaces: 1,
+            max_power_ma: 100,
+            is_configured: true,
+            connected_duration_ms: None,
+            rx_lanes: None,
+        }
+    }
 
     #[test]
     fn test_device_path_parent() {
@@ -440,5 +541,33 @@ mod tests {
         assert_eq!(format_bandwidth(64_000), "64.00 Kbps");
         assert_eq!(format_bandwidth(480_000_000), "480.00 Mbps");
         assert_eq!(format_bandwidth(5_000_000_000), "5.00 Gbps");
+    }
+
+    #[test]
+    fn test_vid_pid() {
+        let device = make_test_device(0x0d28, 0x0204, None);
+        assert_eq!(device.vid_pid(), "0d28:0204");
+
+        // Leading zeros preserved
+        let device2 = make_test_device(0x0001, 0x0002, None);
+        assert_eq!(device2.vid_pid(), "0001:0002");
+    }
+
+    #[test]
+    fn test_config_key_with_serial() {
+        let device = make_test_device(0x0d28, 0x0204, Some("0240000034e428"));
+        assert_eq!(device.config_key(), "0d28:0204:0240000034e428");
+    }
+
+    #[test]
+    fn test_config_key_without_serial() {
+        let device = make_test_device(0x0d28, 0x0204, None);
+        assert_eq!(device.config_key(), "0d28:0204");
+    }
+
+    #[test]
+    fn test_config_key_empty_serial() {
+        let device = make_test_device(0x0d28, 0x0204, Some(""));
+        assert_eq!(device.config_key(), "0d28:0204");
     }
 }

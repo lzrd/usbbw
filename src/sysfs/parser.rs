@@ -1,8 +1,8 @@
 //! Sysfs parser for USB device information.
 
 use crate::model::{
-    ControllerId, ControllerType, DevicePath, Direction, Endpoint, PhysicalLocation, TransferType,
-    UsbBus, UsbController, UsbDevice, UsbSpeed, UsbTopology,
+    ControllerId, ControllerType, DevicePath, Direction, Endpoint, PhysicalLocation, PortInfo,
+    PortState, TransferType, UsbBus, UsbController, UsbDevice, UsbSpeed, UsbTopology,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -207,6 +207,9 @@ impl SysfsParser {
         let version = self.read_attr_string(&path, "version").unwrap_or_default();
         let num_ports = self.read_attr_u8(&path, "maxchild").unwrap_or(0);
 
+        // Parse root hub port info
+        let ports = self.parse_root_ports(bus_num, num_ports);
+
         Ok(UsbBus {
             bus_num,
             speed: UsbSpeed::from_mbps(speed).unwrap_or(UsbSpeed::Full),
@@ -214,7 +217,50 @@ impl SysfsParser {
             num_ports,
             devices: HashMap::new(),
             controller_id: self.get_controller_id(bus_num)?,
+            ports,
         })
+    }
+
+    /// Parse root hub port info.
+    fn parse_root_ports(&self, bus_num: u8, num_ports: u8) -> Vec<PortInfo> {
+        let mut ports = Vec::new();
+
+        // Root hub interface path: usb{N}/{N}-0:1.0/
+        let iface_path = self
+            .base_path
+            .join(format!("usb{}", bus_num))
+            .join(format!("{}-0:1.0", bus_num));
+
+        for port_num in 1..=num_ports {
+            let port_path = iface_path.join(format!("usb{}-port{}", bus_num, port_num));
+
+            let state = self
+                .read_attr_string(&port_path, "state")
+                .map(|s| PortState::from_sysfs(&s))
+                .unwrap_or_default();
+
+            let over_current_count = self
+                .read_attr_string(&port_path, "over_current_count")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0);
+
+            // Check if a device is connected to this port
+            let device_path = if state == PortState::Configured || state == PortState::Suspended {
+                Some(DevicePath::new(format!("{}-{}", bus_num, port_num)))
+            } else {
+                None
+            };
+
+            ports.push(PortInfo {
+                port_num,
+                state,
+                over_current_count,
+                device_path,
+            });
+        }
+
+        ports
     }
 
     /// Parse a USB device.
@@ -267,6 +313,15 @@ impl SysfsParser {
         // Parse max power consumption (bMaxPower is like "500mA" or "0mA")
         let max_power_ma = self.parse_max_power(&path).unwrap_or(0);
 
+        // Parse connection duration (milliseconds)
+        let connected_duration_ms = self
+            .read_attr_string(&path.join("power"), "connected_duration")
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+
+        // Parse USB 3.x rx_lanes (1 for SS, 2 for SS Gen 2x2)
+        let rx_lanes = self.read_attr_u8(&path, "rx_lanes").ok();
+
         Ok(UsbDevice {
             path: DevicePath::new(name),
             speed: UsbSpeed::from_mbps(speed).unwrap_or(UsbSpeed::Full),
@@ -286,6 +341,8 @@ impl SysfsParser {
             num_interfaces,
             max_power_ma,
             is_configured,
+            connected_duration_ms,
+            rx_lanes,
         })
     }
 

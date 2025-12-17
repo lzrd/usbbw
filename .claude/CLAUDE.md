@@ -55,6 +55,8 @@ examples/
 - `UsbTopology` - Complete system USB topology (controllers + buses + devices)
 - `UsbBus` - A USB bus with its devices and bandwidth pool
 - `UsbDevice` - A device with endpoints, configuration status, supports hubs
+  - `config_key()` - Returns `VID:PID:iSerial` or `VID:PID` for config lookups
+  - `vid_pid()` - Returns `VID:PID` formatted string
 - `Endpoint` - USB endpoint with bandwidth calculation
 - `BandwidthPool` - Tracks used/available periodic bandwidth
 
@@ -109,6 +111,7 @@ To test with a config file:
 
 ```bash
 usbbw                           # Launch TUI (default)
+usbbw report                    # Detailed report for sharing/debugging (diffable)
 usbbw summary                   # Text summary of bus bandwidth + power
 usbbw recommend                 # Show best buses for new devices
 usbbw list [-v] [--periodic-only]  # List devices (verbose shows power, serial)
@@ -117,13 +120,14 @@ usbbw mermaid --markdown        # Full markdown doc with tables
 usbbw mermaid --html            # Standalone HTML (view in browser)
 usbbw init-config               # Print blank example TOML config
 usbbw generate-config [-o FILE] # Generate config from current system
-usbbw completions <SHELL>       # Generate shell completions (bash/zsh/fish/powershell)
+usbbw completions <SHELL>       # Generate shell completions (bash/zsh/fish/powershell/elvish)
 ```
 
 ## TUI Keybindings
 
 **Navigation:**
 - `j/k` or arrows: Navigate up/down
+- `J/K` or PgUp/PgDn: Scroll details panel
 - `Enter`: Expand/collapse selected
 - `x`: Expand/collapse all
 - `g`: Go to top
@@ -144,6 +148,17 @@ usbbw completions <SHELL>       # Generate shell completions (bash/zsh/fish/powe
 - `a`: Toggle auto-refresh
 - `?`: Help overlay
 - `q`: Quit
+
+**Status Line:**
+- Shows device path (e.g., `3-2.1`) and config key (`VID:PID:iSerial`) for easy copying
+- Device path format matches `uhubctl` for power control
+
+**Tree Icons:**
+- `⚡` - USB bus
+- `🔀` - Hub
+- `📱` - Device
+- `⚠` - Device not configured (bandwidth allocation failed)
+- `●NEW` - Device discovered after startup
 
 ## Device Labeling
 
@@ -255,6 +270,8 @@ collapse_single_child_hubs = false
 usbbw completions bash > ~/.local/share/bash-completion/completions/usbbw.sh
 usbbw completions zsh > ~/.zfunc/_usbbw
 usbbw completions fish > ~/.config/fish/completions/usbbw.fish
+usbbw completions powershell > usbbw.ps1
+usbbw completions elvish > ~/.elvish/lib/usbbw.elv
 ```
 
 ## Dependencies

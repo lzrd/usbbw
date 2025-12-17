@@ -37,6 +37,9 @@ enum Commands {
     /// Show bandwidth usage summary
     Summary,
 
+    /// Generate detailed report (for sharing/debugging)
+    Report,
+
     /// Export topology as Mermaid diagram
     Mermaid {
         /// Output file (default: stdout)
@@ -110,6 +113,9 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Summary) => {
             print_summary(&topology, &config);
+        }
+        Some(Commands::Report) => {
+            print_report(&topology, &config);
         }
         Some(Commands::Mermaid {
             output,
@@ -209,6 +215,133 @@ fn print_summary(topology: &usbbw::UsbTopology, config: &Config) {
             println!("  Power:       {} mA", total_power);
         }
         println!();
+    }
+}
+
+fn print_report(topology: &usbbw::UsbTopology, config: &Config) {
+    // Collect totals
+    let mut total_devices = 0;
+    let mut total_periodic_bw = 0u64;
+    let mut total_power_ma = 0u16;
+    let mut unconfigured_count = 0;
+
+    // Print by controller
+    for controller in topology.controllers_sorted() {
+        let controller_label = config
+            .controller_label(&controller.id.0)
+            .unwrap_or_else(|| controller.id.0.clone());
+
+        println!("Controller: {} [{}]", controller_label, controller.id.0);
+
+        // Get buses for this controller (USB 2.0 first, then 3.x)
+        let bus_nums: Vec<u8> = [controller.usb2_bus, controller.usb3_bus]
+            .into_iter()
+            .flatten()
+            .collect();
+
+        for bus_num in bus_nums {
+            let Some(bus) = topology.buses.get(&bus_num) else {
+                continue;
+            };
+
+            let pool = BandwidthPool::with_usage(bus.speed, bus.periodic_bandwidth_used_bps());
+            let bus_label = config
+                .bus_label(bus.bus_num)
+                .unwrap_or_else(|| format!("Bus {}", bus.bus_num));
+
+            println!(
+                "  Bus {}: {} ({}) - {:.1}% used",
+                bus.bus_num,
+                bus_label,
+                bus.speed.short_name(),
+                pool.periodic_usage_percent()
+            );
+
+            // Show port health issues
+            let oc_count = bus.total_over_current_count();
+            if oc_count > 0 {
+                println!("    ⚠ Over-current events: {}", oc_count);
+            }
+            for port in &bus.ports {
+                if port.state.is_problematic() {
+                    let state_str = match port.state {
+                        usbbw::model::PortState::Reconnecting => "reconnecting",
+                        usbbw::model::PortState::Powered => "powered (not enumerated)",
+                        usbbw::model::PortState::Disconnected => "disconnected",
+                        _ => "issue",
+                    };
+                    println!("    ⚠ Port {}: {}", port.port_num, state_str);
+                }
+            }
+
+            // Print devices in tree order
+            for device in bus.devices_tree_order() {
+                total_devices += 1;
+                total_periodic_bw += device.periodic_bandwidth_bps();
+                total_power_ma = total_power_ma.saturating_add(device.max_power_ma);
+
+                let indent = "    ".to_string() + &"  ".repeat(device.path.depth());
+                let name = config
+                    .device_label(
+                        &device.path.0,
+                        device.vendor_id,
+                        device.product_id,
+                        device.serial.as_deref(),
+                        device.physical_location.as_ref(),
+                    )
+                    .unwrap_or_else(|| device.display_name());
+
+                // Status indicators
+                let status = if !device.is_configured {
+                    unconfigured_count += 1;
+                    " [NOT CONFIGURED]"
+                } else {
+                    ""
+                };
+
+                // Device line: path, config key, name
+                println!(
+                    "{}{}  {}  {}{}",
+                    indent,
+                    device.path.0,
+                    device.config_key(),
+                    name,
+                    status
+                );
+
+                // Details line: bandwidth, power
+                let bw = device.periodic_bandwidth_bps();
+                let mut details = Vec::new();
+                if bw > 0 {
+                    details.push(format!("bw:{}", format_bandwidth(bw)));
+                }
+                if device.max_power_ma > 0 {
+                    details.push(format!("pwr:{}mA", device.max_power_ma));
+                }
+                if device.is_hub {
+                    details.push("hub".to_string());
+                }
+                if !details.is_empty() {
+                    println!("{}  {}", indent, details.join(" "));
+                }
+            }
+        }
+        println!();
+    }
+
+    // Summary
+    println!("---");
+    println!(
+        "Total: {} devices, {}, {} mA",
+        total_devices,
+        format_bandwidth(total_periodic_bw),
+        total_power_ma
+    );
+    if unconfigured_count > 0 {
+        println!(
+            "Warning: {} device(s) not configured (bandwidth allocation failed)",
+            unconfigured_count
+        );
     }
 }
 
@@ -485,6 +618,12 @@ fn run_tui(topology: usbbw::UsbTopology, config: Config) -> Result<()> {
                     if app.show_help {
                         app.show_help = false;
                     }
+                }
+                KeyCode::PageUp | KeyCode::Char('K') => {
+                    app.scroll_details_up();
+                }
+                KeyCode::PageDown | KeyCode::Char('J') => {
+                    app.scroll_details_down();
                 }
                 _ => {}
             }
