@@ -745,6 +745,7 @@ fn render_help(frame: &mut Frame) {
         )),
         Line::from("  r       Refresh topology"),
         Line::from("  a       Toggle auto-refresh"),
+        Line::from("  Ctrl+L  Clear and repaint screen"),
         Line::from("  ?       Toggle help"),
         Line::from("  q       Quit"),
         Line::from(""),

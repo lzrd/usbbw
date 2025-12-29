@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -536,6 +536,12 @@ fn run_tui(topology: usbbw::UsbTopology, config: Config) -> Result<()> {
             }
 
             // Normal mode keybindings
+            // Ctrl+L: clear and repaint screen
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
+                terminal.clear()?;
+                continue;
+            }
+
             match key.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Char('j') | KeyCode::Down => {
